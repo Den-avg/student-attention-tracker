@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Attention Monitor - System Activity Bridge",
+  "version": "1.0",
+  "description": "Reports real system-wide mouse/keyboard activity (across all apps, not just the browser tab) to the Student Attention Monitor page.",
+  "permissions": ["idle"],
+  "host_permissions": ["https://den-avg.github.io/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://den-avg.github.io/student-attention-tracker/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
