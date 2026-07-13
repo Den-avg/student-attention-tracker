@@ -33,13 +33,28 @@ Repo → Settings → Pages → Source: `main` branch, `/ (root)`. Your app will
 `https://<your-username>.github.io/<repo-name>/`.
 
 ### 3. Deploy the Apps Script logger
-- Open the Apps Script project tied to `SPREADSHEET_ID` in `apps-script/Code.gs` (confirm the ID matches your sheet — a placeholder inline comment flags this).
+- Open the Apps Script project tied to `SPREADSHEET_ID` in `apps-script/Code.gs`.
 - Paste in `Code.gs`.
+- **Add your DeepSeek API key**: Project Settings (gear icon) → Script Properties → Add property → name it `DEEPSEEK_API_KEY`, value = your DeepSeek API key. This powers the AI-written feedback in column D. If this property is missing, the script falls back to a simple one-line summary instead of failing.
 - Deploy → New deployment → Web app → Execute as: **Me** → Who has access: **Anyone** (or "Anyone with Google account" per your school's policy).
 - Copy the `/exec` URL.
 
-### 4. Connect the two
-On the GitHub Pages page, paste the Apps Script `/exec` URL into the "Apps Script Web App URL" field, enter a student/session ID, click **Request Camera Access**, then **Start Monitoring**. Scores log to a sheet tab called `Attention_Log` every 10 seconds.
+### 5. (Optional but recommended) Install the system-activity extension
+`extension/` is a Chrome/Edge extension that reports **real system-wide mouse/keyboard activity** — across all apps, not just the browser tab — using Chrome's `idle` API. Without it, activity tracking falls back to clicks/keys/scrolls inside the tracker tab only.
+
+1. Go to `chrome://extensions` (or `edge://extensions`).
+2. Turn on **Developer mode** (top right).
+3. Click **Load unpacked** and select the `extension/` folder from this repo.
+4. Open the tracker page — the header badge should switch from "Checking extension…" to "✅ System activity: connected" within a couple of seconds.
+
+Note the real limit here: `chrome.idle` reports whether the *system* is active or idle (mouse/keyboard used anywhere), at ~15-second granularity. It cannot see *what* the student is doing in another app — just that some input happened. True per-application tracking (e.g., "was in Word vs. a game") would require a native OS-level agent, a much larger build outside what a browser can do.
+
+## Accuracy notes
+Head-turn and no-face detection are intentionally lenient to avoid false "distracted" flags for normal behavior:
+- A brief glance down while actively typing is not penalized as heavily as a sustained turn.
+- Each displayed/logged score is smoothed over the last 3 checks, so one noisy or momentary frame doesn't spike a false distraction event.
+- Consider these thresholds a starting point — if you're still seeing false positives/negatives during real use, the constants (`0.25` head-yaw threshold, `0.18` eye-aspect-ratio, penalty weights) are worth tuning in `index.html`'s `analyzeFrame()`.
+
 
 ## How the attention score works
 
