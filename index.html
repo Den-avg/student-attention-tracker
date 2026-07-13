@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Student Attention Monitor</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; background:linear-gradient(135deg,#1e3c72 0%,#2a5298 100%); min-height:100vh; padding:10px; color:#333; }
+  .container { max-width:1200px; margin:0 auto; background:#fff; border-radius:20px; box-shadow:0 20px 60px rgba(0,0,0,0.3); overflow:hidden; }
+  .header { background:linear-gradient(135deg,#5e35b1 0%,#7e57c2 100%); color:#fff; padding:20px 25px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; }
+  .header h1 { font-size:22px; } .header p { font-size:13px; opacity:.9; }
+  .session-status { background:rgba(255,255,255,.2); padding:8px 18px; border-radius:20px; font-size:13px; font-weight:bold; }
+  .session-status.active { background:#4caf50; }
+  .setup-box { background:#fff3cd; border:2px solid #ffc107; border-radius:10px; padding:18px; margin:18px; }
+  .setup-box label { display:block; font-size:12px; font-weight:bold; margin-bottom:4px; color:#856404; }
+  .setup-box input { width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; margin-bottom:10px; font-size:13px; }
+  .main-grid { display:grid; grid-template-columns:2fr 1fr; gap:0; }
+  .camera-section { position:relative; background:#000; aspect-ratio:4/3; }
+  video, canvas { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; }
+  video { display:none; }
+  .placeholder { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:#fff; text-align:center; }
+  .score-panel { position:absolute; bottom:10px; left:10px; background:rgba(0,0,0,.7); color:#fff; padding:10px 14px; border-radius:8px; font-family:monospace; font-size:12px; }
+  .score-panel .big { font-size:28px; font-weight:bold; }
+  .sidebar { background:#f5f5f5; padding:18px; overflow-y:auto; max-height:calc(100vh - 220px); }
+  .stats-card { background:#fff; border-radius:10px; padding:14px; margin-bottom:14px; box-shadow:0 2px 5px rgba(0,0,0,.1); }
+  .stats-card h3 { font-size:13px; color:#666; margin-bottom:10px; text-transform:uppercase; }
+  .stat-item { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #eee; font-size:13px; }
+  .stat-item:last-child { border-bottom:none; }
+  .stat-value { font-weight:bold; }
+  .ok{color:#4caf50;} .warn{color:#ff9800;} .bad{color:#f44336;}
+  .bar-track { width:100%; height:14px; background:#e0e0e0; border-radius:7px; overflow:hidden; margin-top:6px; }
+  .bar-fill { height:100%; background:linear-gradient(90deg,#f44336,#ff9800,#4caf50); transition:width .4s; }
+  .log-entry { padding:7px; margin:4px 0; border-left:3px solid #ddd; background:#fafafa; border-radius:3px; font-size:11px; }
+  .log-entry.bad{border-left-color:#f44336;background:#ffebee;} .log-entry.warn{border-left-color:#ff9800;background:#fff3e0;} .log-entry.ok{border-left-color:#4caf50;background:#e8f5e9;}
+  .log-time{font-size:9px;color:#999;}
+  .controls { padding:18px; background:#fafafa; display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .btn { padding:12px; border:none; border-radius:8px; font-weight:600; cursor:pointer; }
+  .btn-start{background:#4caf50;color:#fff;grid-column:1/-1;} .btn-stop{background:#f44336;color:#fff;grid-column:1/-1;}
+  .btn-secondary{background:#e0e0e0;color:#333;} .btn:disabled{opacity:.5;cursor:not-allowed;}
+  @media (max-width:768px){ .main-grid{grid-template-columns:1fr;} .controls{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div><h1>🎯 Student Attention Monitor</h1><p>Posture · Eyes · Head · Mouse · Keyboard</p></div>
+    <div class="session-status" id="sessionStatus">Inactive</div>
+  </div>
+
+  <div class="setup-box" id="setupBox">
+    <p style="margin-bottom:10px;color:#856404;font-size:13px">This page runs entirely in your browser (GitHub Pages), so camera access isn't blocked by Apps Script's iframe sandbox. Landmark detection runs locally; only periodic attention scores are sent to your Apps Script logger.</p>
+    <label>Apps Script Web App URL (for logging to Google Sheets — optional)</label>
+    <input id="endpointUrl" placeholder="https://script.google.com/macros/s/XXXX/exec">
+    <label>Student / Session ID</label>
+    <input id="studentId" placeholder="e.g. student_012">
+    <button class="btn btn-secondary" id="requestCameraBtn" style="width:100%">📷 Request Camera Access</button>
+  </div>
+
+  <div class="main-grid">
+    <div class="camera-section">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="placeholder" id="placeholder"><h2>📷</h2><p>Camera not active</p></div>
+      <div class="score-panel" id="scorePanel">
+        <div>Attention: <span class="big" id="scoreVal">--</span></div>
+        <div>Head: <span id="headStatus">--</span> | Eyes: <span id="eyeStatus">--</span> | Posture: <span id="postureStatus">--</span></div>
+        <div>Idle: <span id="idleStatus">--</span>s</div>
+      </div>
+    </div>
+    <div class="sidebar">
+      <div class="stats-card">
+        <h3>Live Attention</h3>
+        <div class="bar-track"><div class="bar-fill" id="barFill" style="width:0%"></div></div>
+      </div>
+      <div class="stats-card">
+        <h3>Session Stats</h3>
+        <div class="stat-item"><span>Checks</span><span class="stat-value" id="totalChecks">0</span></div>
+        <div class="stat-item"><span>Distracted events</span><span class="stat-value bad" id="distractedCount">0</span></div>
+        <div class="stat-item"><span>No face</span><span class="stat-value warn" id="noFaceCount">0</span></div>
+        <div class="stat-item"><span>Poor posture</span><span class="stat-value warn" id="postureCount">0</span></div>
+        <div class="stat-item"><span>Clicks</span><span class="stat-value" id="clickCount">0</span></div>
+        <div class="stat-item"><span>Keystrokes</span><span class="stat-value" id="keyCount">0</span></div>
+        <div class="stat-item"><span>Avg attention</span><span class="stat-value ok" id="avgScore">--</span></div>
+      </div>
+      <div class="stats-card">
+        <h3>Event Log</h3>
+        <div id="eventLog" style="max-height:260px;overflow-y:auto"><div class="log-entry ok"><div>Ready.</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn-start" id="startBtn" disabled>▶️ Start Monitoring</button>
+    <button class="btn btn-stop" id="stopBtn" style="display:none">⏹️ Stop Monitoring</button>
+    <button class="btn btn-secondary" id="exportBtn">📥 Export Log</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script>
+// ---------- STATE ----------
+let stream, holistic, camera, monitoring = false;
+let stats = { checks:0, distracted:0, noFace:0, posture:0, clicks:0, keys:0, scoreSum:0 };
+let eventLog = [];
+let lastClickTime = Date.now(), lastKeyTime = Date.now();
+let latestLandmarks = { face:null, pose:null };
+let logIntervalId, analyzeIntervalId;
+
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const ctx = overlay.getContext('2d');
+const placeholder = document.getElementById('placeholder');
+const setupBox = document.getElementById('setupBox');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+
+// ---------- INPUT ACTIVITY TRACKING ----------
+window.addEventListener('click', () => { lastClickTime = Date.now(); stats.clicks++; document.getElementById('clickCount').innerText = stats.clicks; });
+window.addEventListener('keydown', () => { lastKeyTime = Date.now(); stats.keys++; document.getElementById('keyCount').innerText = stats.keys; });
+
+// ---------- CAMERA ----------
+document.getElementById('requestCameraBtn').addEventListener('click', async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width:640, height:480 } });
+    video.srcObject = stream;
+    placeholder.style.display = 'none';
+    setupBox.style.display = 'none';
+    startBtn.disabled = false;
+    logEvent('Camera ready.', 'ok');
+    initHolistic();
+  } catch (e) {
+    logEvent('Camera error: ' + e.message, 'bad');
+  }
+});
+
+function initHolistic() {
+  holistic = new Holistic({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${f}` });
+  holistic.setOptions({ modelComplexity: 1, smoothLandmarks: true, refineFaceLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+  holistic.onResults((results) => {
+    latestLandmarks.face = results.faceLandmarks || null;
+    latestLandmarks.pose = results.poseLandmarks || null;
+    drawOverlay(results);
+  });
+  camera = new Camera(video, {
+    onFrame: async () => { await holistic.send({ image: video }); },
+    width: 640, height: 480
+  });
+  camera.start();
+}
+
+function drawOverlay(results) {
+  overlay.width = video.videoWidth || 640;
+  overlay.height = video.videoHeight || 480;
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  ctx.fillStyle = '#4caf50';
+  if (results.faceLandmarks) {
+    for (const p of results.faceLandmarks) ctx.fillRect(p.x * overlay.width, p.y * overlay.height, 1, 1);
+  }
+}
+
+// ---------- ANALYSIS ----------
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+function eyeAspectRatio(lm, idx) {
+  // idx = [outerCorner, top1, top2, innerCorner, bottom1, bottom2]
+  const [o, t1, t2, i, b1, b2] = idx.map(n => lm[n]);
+  const vertical = (dist(t1, b1) + dist(t2, b2)) / 2;
+  const horizontal = dist(o, i);
+  return horizontal ? vertical / horizontal : 0;
+}
+
+const LEFT_EYE = [33, 160, 158, 133, 153, 144];
+const RIGHT_EYE = [263, 387, 385, 362, 380, 373];
+
+function analyzeFrame() {
+  if (!monitoring) return;
+  stats.checks++;
+  document.getElementById('totalChecks').innerText = stats.checks;
+
+  let headStatus = 'N/A', eyeStatus = 'N/A', postureStatus = 'N/A';
+  let headPenalty = 0, eyePenalty = 0, posturePenalty = 0;
+  let faceDetected = false;
+
+  const face = latestLandmarks.face;
+  if (face && face.length > 0) {
+    faceDetected = true;
+    // Head yaw estimate: nose tip (1) relative to face width (cheek landmarks 234/454)
+    const nose = face[1], leftCheek = face[234], rightCheek = face[454];
+    const faceWidth = dist(leftCheek, rightCheek) || 1;
+    const noseOffset = (nose.x - (leftCheek.x + rightCheek.x) / 2) / faceWidth;
+    if (Math.abs(noseOffset) > 0.18) {
+      headStatus = noseOffset > 0 ? 'turned right' : 'turned left';
+      headPenalty = 35;
+    } else {
+      headStatus = 'forward';
+    }
+
+    // Eye closure via EAR
+    const ear = (eyeAspectRatio(face, LEFT_EYE) + eyeAspectRatio(face, RIGHT_EYE)) / 2;
+    if (ear < 0.18) { eyeStatus = 'closed/drowsy'; eyePenalty = 30; }
+    else { eyeStatus = 'open'; }
+  } else {
+    headStatus = 'no face'; eyeStatus = 'no face';
+    headPenalty = 40; eyePenalty = 20;
+    stats.noFace++;
+    document.getElementById('noFaceCount').innerText = stats.noFace;
+  }
+
+  const pose = latestLandmarks.pose;
+  if (pose && pose.length > 0) {
+    // Posture: forward-lean / slouch via nose-to-shoulder-midpoint vertical gap & shoulder tilt
+    const nose = pose[0], lShoulder = pose[11], rShoulder = pose[12];
+    if (nose && lShoulder && rShoulder) {
+      const shoulderMidY = (lShoulder.y + rShoulder.y) / 2;
+      const shoulderWidth = dist(lShoulder, rShoulder) || 1;
+      const headDrop = (nose.y - shoulderMidY) / shoulderWidth; // more negative normally; less negative = slouch
+      const shoulderTilt = Math.abs(lShoulder.y - rShoulder.y) / shoulderWidth;
+      if (headDrop > -0.3 || shoulderTilt > 0.25) {
+        postureStatus = 'slouching'; posturePenalty = 20;
+        stats.posture++;
+        document.getElementById('postureCount').innerText = stats.posture;
+      } else {
+        postureStatus = 'upright';
+      }
+    }
+  } else {
+    postureStatus = 'not visible'; posturePenalty = 10;
+  }
+
+  // Input-activity idle penalty
+  const idleSeconds = Math.min((Date.now() - Math.max(lastClickTime, lastKeyTime)) / 1000, 999);
+  let idlePenalty = 0;
+  if (idleSeconds > 90) idlePenalty = 15;
+  else if (idleSeconds > 45) idlePenalty = 8;
+
+  let score = 100 - headPenalty - eyePenalty - posturePenalty - idlePenalty;
+  score = Math.max(0, Math.min(100, score));
+  stats.scoreSum += score;
+
+  document.getElementById('scoreVal').innerText = score;
+  document.getElementById('headStatus').innerText = headStatus;
+  document.getElementById('eyeStatus').innerText = eyeStatus;
+  document.getElementById('postureStatus').innerText = postureStatus;
+  document.getElementById('idleStatus').innerText = Math.round(idleSeconds);
+  document.getElementById('barFill').style.width = score + '%';
+  document.getElementById('avgScore').innerText = Math.round(stats.scoreSum / stats.checks);
+
+  if (score < 50) {
+    stats.distracted++;
+    document.getElementById('distractedCount').innerText = stats.distracted;
+    logEvent(`Low attention (${score}) — head:${headStatus}, eyes:${eyeStatus}, posture:${postureStatus}`, 'bad');
+  } else if (score < 75) {
+    logEvent(`Attention dip (${score})`, 'warn');
+  }
+
+  return { score, headStatus, eyeStatus, postureStatus, faceDetected, idleSeconds, clicks: stats.clicks, keys: stats.keys };
+}
+
+function logEvent(message, type) {
+  const time = new Date().toLocaleTimeString();
+  eventLog.unshift({ message, type, time });
+  if (eventLog.length > 60) eventLog.pop();
+  document.getElementById('eventLog').innerHTML = eventLog.map(e =>
+    `<div class="log-entry ${e.type}"><div>${e.message}</div><div class="log-time">${e.time}</div></div>`).join('');
+}
+
+// ---------- LOGGING TO APPS SCRIPT (Google Sheets) ----------
+async function sendLog(result) {
+  const url = document.getElementById('endpointUrl').value.trim();
+  if (!url) return;
+  const studentId = document.getElementById('studentId').value.trim() || 'unknown';
+  try {
+    await fetch(url, {
+      method: 'POST',
+      mode: 'no-cors', // Apps Script doPost doesn't return readable CORS headers; this still delivers the POST
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ studentId, timestamp: new Date().toISOString(), ...result })
+    });
+  } catch (e) {
+    console.warn('Log send failed', e);
+  }
+}
+
+// ---------- CONTROLS ----------
+startBtn.addEventListener('click', () => {
+  monitoring = true;
+  startBtn.style.display = 'none';
+  stopBtn.style.display = 'block';
+  document.getElementById('sessionStatus').classList.add('active');
+  document.getElementById('sessionStatus').innerText = 'Active';
+  logEvent('Monitoring started.', 'ok');
+  analyzeIntervalId = setInterval(analyzeFrame, 1500);
+  logIntervalId = setInterval(() => sendLog(analyzeFrame()), 10000);
+});
+
+document.getElementById('stopBtn').addEventListener('click', () => {
+  monitoring = false;
+  startBtn.style.display = 'block';
+  stopBtn.style.display = 'none';
+  document.getElementById('sessionStatus').classList.remove('active');
+  document.getElementById('sessionStatus').innerText = 'Inactive';
+  clearInterval(analyzeIntervalId);
+  clearInterval(logIntervalId);
+  logEvent('Monitoring stopped.', 'ok');
+});
+
+document.getElementById('exportBtn').addEventListener('click', () => {
+  const data = { exportedAt: new Date().toISOString(), stats, eventLog };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `attention-log-${Date.now()}.json`;
+  a.click();
+});
+</script>
+</body>
+</html>
