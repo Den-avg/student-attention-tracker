@@ -111,23 +111,38 @@ let latestLandmarks = { face:null, pose:null };
 let logIntervalId, analyzeIntervalId;
 let selectedStudent = null; // { name, id }
 
-// ---------- LOAD STUDENT LIST ----------
-async function loadStudents() {
+// ---------- LOAD STUDENT LIST (JSONP — Apps Script doesn't send CORS headers for fetch()) ----------
+function loadStudents() {
   const select = document.getElementById('studentSelect');
-  try {
-    const res = await fetch(`${APPS_SCRIPT_URL}?listStudents=1`);
-    const students = await res.json();
-    if (!students.length) {
-      select.innerHTML = '<option value="">No students found in sheet</option>';
-      return;
+  const callbackName = 'handleStudents_' + Date.now();
+  const timeout = setTimeout(() => {
+    if (window[callbackName]) {
+      select.innerHTML = '<option value="">Failed to load students (timed out)</option>';
+      delete window[callbackName];
     }
-    select.innerHTML = '<option value="">Select a student…</option>' +
-      students.map(s => `<option value="${s.id}" data-name="${s.name}">${s.name} (${s.id})</option>`).join('');
-    document.getElementById('requestCameraBtn').disabled = false;
-  } catch (e) {
+  }, 10000);
+
+  window[callbackName] = function (students) {
+    clearTimeout(timeout);
+    if (!students || !students.length) {
+      select.innerHTML = '<option value="">No students found in sheet</option>';
+    } else {
+      select.innerHTML = '<option value="">Select a student…</option>' +
+        students.map(s => `<option value="${s.id}" data-name="${s.name}">${s.name} (${s.id})</option>`).join('');
+      document.getElementById('requestCameraBtn').disabled = false;
+    }
+    delete window[callbackName];
+    script.remove();
+  };
+
+  const script = document.createElement('script');
+  script.src = `${APPS_SCRIPT_URL}?listStudents=1&callback=${callbackName}`;
+  script.onerror = () => {
+    clearTimeout(timeout);
     select.innerHTML = '<option value="">Failed to load students</option>';
-    console.error('loadStudents failed', e);
-  }
+    delete window[callbackName];
+  };
+  document.body.appendChild(script);
 }
 document.getElementById('studentSelect').addEventListener('change', (e) => {
   const opt = e.target.selectedOptions[0];
