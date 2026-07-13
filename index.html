@@ -14,7 +14,7 @@
   .session-status.active { background:#4caf50; }
   .setup-box { background:#fff3cd; border:2px solid #ffc107; border-radius:10px; padding:18px; margin:18px; }
   .setup-box label { display:block; font-size:12px; font-weight:bold; margin-bottom:4px; color:#856404; }
-  .setup-box input { width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; margin-bottom:10px; font-size:13px; }
+  .setup-box input, .setup-box select { width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; margin-bottom:10px; font-size:13px; }
   .main-grid { display:grid; grid-template-columns:2fr 1fr; gap:0; }
   .camera-section { position:relative; background:#000; aspect-ratio:4/3; }
   video, canvas { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; }
@@ -49,12 +49,10 @@
   </div>
 
   <div class="setup-box" id="setupBox">
-    <p style="margin-bottom:10px;color:#856404;font-size:13px">This page runs entirely in your browser (GitHub Pages), so camera access isn't blocked by Apps Script's iframe sandbox. Landmark detection runs locally; only periodic attention scores are sent to your Apps Script logger.</p>
-    <label>Apps Script Web App URL (for logging to Google Sheets — optional)</label>
-    <input id="endpointUrl" placeholder="https://script.google.com/macros/s/XXXX/exec">
-    <label>Student / Session ID</label>
-    <input id="studentId" placeholder="e.g. student_012">
-    <button class="btn btn-secondary" id="requestCameraBtn" style="width:100%">📷 Request Camera Access</button>
+    <p style="margin-bottom:10px;color:#856404;font-size:13px">This page runs entirely in your browser (GitHub Pages), so camera access isn't blocked by Apps Script's iframe sandbox. Landmark detection runs locally; only periodic scores are sent to Google Sheets. When you stop the session, the overall score and feedback are written back to that student's row in the Students tab.</p>
+    <label>Student</label>
+    <select id="studentSelect"><option value="">Loading students…</option></select>
+    <button class="btn btn-secondary" id="requestCameraBtn" style="width:100%" disabled>📷 Request Camera Access</button>
   </div>
 
   <div class="main-grid">
@@ -100,13 +98,42 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
 <script>
+// ---------- CONFIG ----------
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxR7yw5MBIo_7ISUXNEgiooIUQ9a8uGTuz-ZGcjA0S34BUFRl1OqLIr1VFi1dD2hQblwA/exec';
+
 // ---------- STATE ----------
 let stream, holistic, camera, monitoring = false;
-let stats = { checks:0, distracted:0, noFace:0, posture:0, clicks:0, keys:0, scoreSum:0 };
+let stats = { checks:0, distracted:0, noFace:0, posture:0, clicks:0, keys:0, scoreSum:0, eyeClosed:0 };
+let sessionScores = []; // every analyzeFrame score for this session, for the end-of-session summary
 let eventLog = [];
 let lastClickTime = Date.now(), lastKeyTime = Date.now();
 let latestLandmarks = { face:null, pose:null };
 let logIntervalId, analyzeIntervalId;
+let selectedStudent = null; // { name, id }
+
+// ---------- LOAD STUDENT LIST ----------
+async function loadStudents() {
+  const select = document.getElementById('studentSelect');
+  try {
+    const res = await fetch(`${APPS_SCRIPT_URL}?listStudents=1`);
+    const students = await res.json();
+    if (!students.length) {
+      select.innerHTML = '<option value="">No students found in sheet</option>';
+      return;
+    }
+    select.innerHTML = '<option value="">Select a student…</option>' +
+      students.map(s => `<option value="${s.id}" data-name="${s.name}">${s.name} (${s.id})</option>`).join('');
+    document.getElementById('requestCameraBtn').disabled = false;
+  } catch (e) {
+    select.innerHTML = '<option value="">Failed to load students</option>';
+    console.error('loadStudents failed', e);
+  }
+}
+document.getElementById('studentSelect').addEventListener('change', (e) => {
+  const opt = e.target.selectedOptions[0];
+  selectedStudent = opt && opt.value ? { id: opt.value, name: opt.dataset.name } : null;
+});
+window.addEventListener('load', loadStudents);
 
 const video = document.getElementById('video');
 const overlay = document.getElementById('overlay');
@@ -199,7 +226,7 @@ function analyzeFrame() {
 
     // Eye closure via EAR
     const ear = (eyeAspectRatio(face, LEFT_EYE) + eyeAspectRatio(face, RIGHT_EYE)) / 2;
-    if (ear < 0.18) { eyeStatus = 'closed/drowsy'; eyePenalty = 30; }
+    if (ear < 0.18) { eyeStatus = 'closed/drowsy'; eyePenalty = 30; stats.eyeClosed++; }
     else { eyeStatus = 'open'; }
   } else {
     headStatus = 'no face'; eyeStatus = 'no face';
@@ -238,6 +265,7 @@ function analyzeFrame() {
   let score = 100 - headPenalty - eyePenalty - posturePenalty - idlePenalty;
   score = Math.max(0, Math.min(100, score));
   stats.scoreSum += score;
+  sessionScores.push(score);
 
   document.getElementById('scoreVal').innerText = score;
   document.getElementById('headStatus').innerText = headStatus;
@@ -268,42 +296,92 @@ function logEvent(message, type) {
 
 // ---------- LOGGING TO APPS SCRIPT (Google Sheets) ----------
 async function sendLog(result) {
-  const url = document.getElementById('endpointUrl').value.trim();
-  if (!url) return;
-  const studentId = document.getElementById('studentId').value.trim() || 'unknown';
+  if (!selectedStudent) return;
   try {
-    await fetch(url, {
+    await fetch(APPS_SCRIPT_URL, {
       method: 'POST',
       mode: 'no-cors', // Apps Script doPost doesn't return readable CORS headers; this still delivers the POST
       headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({ studentId, timestamp: new Date().toISOString(), ...result })
+      body: JSON.stringify({ type: 'tick', studentId: selectedStudent.id, timestamp: new Date().toISOString(), ...result })
     });
   } catch (e) {
     console.warn('Log send failed', e);
   }
 }
 
+function generateFeedback() {
+  if (sessionScores.length === 0) return 'No data captured for this session.';
+  const avg = Math.round(sessionScores.reduce((a, b) => a + b, 0) / sessionScores.length);
+  let headline;
+  if (avg >= 85) headline = 'Excellent focus throughout the session.';
+  else if (avg >= 70) headline = 'Good attention with a few brief distractions.';
+  else if (avg >= 50) headline = 'Moderate attention with noticeable lapses in focus.';
+  else headline = 'Low attention overall, with frequent distraction or disengagement.';
+
+  // Call out the most common contributing issue
+  const issues = [
+    { label: 'looking away from the screen', count: stats.distracted },
+    { label: 'not being visible to the camera', count: stats.noFace },
+    { label: 'drowsiness / eyes closing', count: stats.eyeClosed },
+    { label: 'slouching or poor posture', count: stats.posture }
+  ].sort((a, b) => b.count - a.count);
+  const topIssue = issues[0].count > 0 ? ` Most frequent issue: ${issues[0].label} (${issues[0].count} instances).` : '';
+
+  const idleNote = (stats.clicks + stats.keys) < stats.checks * 0.3
+    ? ' Low mouse/keyboard activity relative to session length suggests limited active engagement.'
+    : '';
+
+  return `${headline}${topIssue}${idleNote}`;
+}
+
+async function sendSessionSummary() {
+  if (!selectedStudent || sessionScores.length === 0) return;
+  const avg = Math.round(sessionScores.reduce((a, b) => a + b, 0) / sessionScores.length);
+  const feedback = generateFeedback();
+  try {
+    await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({
+        type: 'sessionEnd',
+        studentId: selectedStudent.id,
+        overallScore: avg,
+        feedback
+      })
+    });
+    logEvent(`Session summary saved for ${selectedStudent.name}: score ${avg}.`, 'ok');
+  } catch (e) {
+    logEvent('Failed to save session summary: ' + e.message, 'bad');
+  }
+}
+
 // ---------- CONTROLS ----------
 startBtn.addEventListener('click', () => {
+  if (!selectedStudent) { alert('Please select a student first.'); return; }
+  sessionScores = [];
   monitoring = true;
   startBtn.style.display = 'none';
   stopBtn.style.display = 'block';
+  document.getElementById('studentSelect').disabled = true;
   document.getElementById('sessionStatus').classList.add('active');
-  document.getElementById('sessionStatus').innerText = 'Active';
-  logEvent('Monitoring started.', 'ok');
+  document.getElementById('sessionStatus').innerText = 'Active: ' + selectedStudent.name;
+  logEvent(`Monitoring started for ${selectedStudent.name}.`, 'ok');
   analyzeIntervalId = setInterval(analyzeFrame, 1500);
   logIntervalId = setInterval(() => sendLog(analyzeFrame()), 10000);
 });
 
-document.getElementById('stopBtn').addEventListener('click', () => {
+document.getElementById('stopBtn').addEventListener('click', async () => {
   monitoring = false;
   startBtn.style.display = 'block';
   stopBtn.style.display = 'none';
+  document.getElementById('studentSelect').disabled = false;
   document.getElementById('sessionStatus').classList.remove('active');
   document.getElementById('sessionStatus').innerText = 'Inactive';
   clearInterval(analyzeIntervalId);
   clearInterval(logIntervalId);
-  logEvent('Monitoring stopped.', 'ok');
+  logEvent('Monitoring stopped. Saving session summary…', 'ok');
+  await sendSessionSummary();
 });
 
 document.getElementById('exportBtn').addEventListener('click', () => {
