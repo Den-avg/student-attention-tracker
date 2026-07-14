@@ -128,10 +128,13 @@ window.addEventListener('message', (event) => {
     extensionConnected = true;
     document.getElementById('extensionStatus').innerText = '✅ System activity: connected';
   }
-  if (event.data.type === 'idleState') {
+  if (event.data.type === 'lastActive') {
     extensionConnected = true;
     document.getElementById('extensionStatus').innerText = '✅ System activity: connected';
-    if (event.data.state === 'active') lastSystemActiveTime = event.data.timestamp;
+    // The extension's background worker + storage record this even while this tab
+    // is frozen/backgrounded, so this can legitimately jump forward when the tab
+    // wakes back up — that's it catching up, not a live tick.
+    if (event.data.timestamp > lastSystemActiveTime) lastSystemActiveTime = event.data.timestamp;
   }
 });
 // If no 'ready' message arrives shortly, the extension isn't installed — fall back gracefully.
