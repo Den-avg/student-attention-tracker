@@ -13,6 +13,9 @@ The original version ran as a Google Apps Script web app (`HtmlService`). Apps S
 ```
 student-attention-tracker/
 ├── index.html          # the full app — deploy this to GitHub Pages
+├── manifest.json        # \
+├── background.js        #  > companion browser extension (system-wide activity), see step 5
+├── content.js           # /
 ├── apps-script/
 │   └── Code.gs          # logging-only backend, deploy separately as an Apps Script web app
 └── README.md
@@ -40,11 +43,11 @@ Repo → Settings → Pages → Source: `main` branch, `/ (root)`. Your app will
 - Copy the `/exec` URL.
 
 ### 5. (Optional but recommended) Install the system-activity extension
-`extension/` is a Chrome/Edge extension that reports **real system-wide mouse/keyboard activity** — across all apps, not just the browser tab — using Chrome's `idle` API. Without it, activity tracking falls back to clicks/keys/scrolls inside the tracker tab only.
+`manifest.json`, `background.js`, and `content.js` in the repo root together form a Chrome/Edge extension that reports **real system-wide mouse/keyboard activity** — across all apps, not just the browser tab — using Chrome's `idle` API. Without it, activity tracking falls back to clicks/keys/scrolls inside the tracker tab only.
 
 1. Go to `chrome://extensions` (or `edge://extensions`).
 2. Turn on **Developer mode** (top right).
-3. Click **Load unpacked** and select the `extension/` folder from this repo.
+3. Click **Load unpacked** and select this repo's root folder (the same folder that contains `manifest.json`).
 4. Open the tracker page — the header badge should switch from "Checking extension…" to "✅ System activity: connected" within a couple of seconds.
 
 Note the real limit here: `chrome.idle` reports whether the *system* is active or idle (mouse/keyboard used anywhere), at ~15-second granularity. It cannot see *what* the student is doing in another app — just that some input happened. True per-application tracking (e.g., "was in Word vs. a game") would require a native OS-level agent, a much larger build outside what a browser can do.
